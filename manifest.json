@@ -1,8 +1,8 @@
 {
   "id": "tedi.terminal-screenshot",
   "name": "Terminal Screenshot",
-  "version": "0.2.0",
-  "description": "Adds a Screenshot button to TEDI's status bar. Click it to open a dropdown listing every visible terminal by its TabBar number (same Terminal N badge you see in the tab strip) plus a Capture-all entry; each selection saves a PNG to disk and copies it to the clipboard. Rebindable shortcut: Ctrl+Alt+S opens the dropdown, Ctrl+Alt+C captures the focused terminal directly.",
+  "version": "0.2.1",
+  "description": "Adds a compact camera icon to TEDI's status bar. Click it to open a dropdown listing every visible terminal by its TabBar number (same Terminal N badge you see in the tab strip) plus a Capture-all entry; each selection saves a PNG to your Downloads folder and copies it to the clipboard. Rebindable shortcut: Ctrl+Alt+S opens the dropdown, Ctrl+Alt+C captures the focused terminal directly.",
   "author": "IlhamRiski - ilhamriski.com",
   "homepage": "https://github.com/IlhamriSKY/TEDI.terminal-screenshot",
   "icon": "logo.png",
@@ -47,9 +47,10 @@
         "icon": "logo.png",
         "defaultOpen": false,
         "toggleCommand": "tedi.terminal-screenshot.toggle",
-        "hideHostHeader": true
+        "hideHostHeader": true,
+        "compact": true
       }
     ]
   },
-  "engines": { "tedi": ">=0.2.15" }
+  "engines": { "tedi": ">=0.2.20" }
 }

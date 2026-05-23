@@ -600,11 +600,30 @@ async function captureMany(targets) {
     }
   }
 
+  const where = describeSaveLocation();
   if (shots.length === 1) {
-    safeToast(`Captured ${shots[0].name}.`, "success");
+    safeToast(`Saved ${shots[0].name} to ${where} + copied to clipboard.`, "success");
   } else {
-    safeToast(`Captured ${shots.length} terminals; first copied to clipboard.`, "success");
+    safeToast(
+      `Saved ${shots.length} screenshots to ${where}; first copied to clipboard.`,
+      "success",
+    );
   }
+}
+
+/**
+ * Best-effort human-readable hint for where the webview just dropped the
+ * PNG. The actual path the OS uses is owned by the webview (WebView2 /
+ * WKWebView / WebKitGTK) — we can't query it without new host APIs — so
+ * we name the most likely default per platform. Helps the user find the
+ * file when the toast disappears.
+ */
+function describeSaveLocation() {
+  const platform = ctx?.os?.platform;
+  if (platform === "windows") return "Downloads (%USERPROFILE%\\Downloads)";
+  if (platform === "macos") return "Downloads (~/Downloads)";
+  if (platform === "linux") return "Downloads (~/Downloads)";
+  return "your Downloads folder";
 }
 
 /**

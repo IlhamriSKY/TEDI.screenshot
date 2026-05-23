@@ -2,6 +2,14 @@
 
 All notable changes to **TEDI Terminal Screenshot**. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [0.2.1] - 2026-05-23
+
+### Changed
+
+- **Status-bar button is now icon-only.** Opts into the new TEDI core `panels[].compact: true` manifest flag (added in TEDI 0.2.20) so the auto-rendered toggle button drops its text label and `<Kbd>` chip in favour of a square 24×24 button that paints `logo.png` directly. The `aria-label` and hover tooltip still carry the panel title ("Screenshot") for accessibility, and the `Ctrl+Alt+S` shortcut still works — it just doesn't take up space on the status bar anymore.
+- **Toast surfaces the save destination.** Capture toasts now read `Saved tedi-terminal-1-...png to Downloads (~/Downloads) + copied to clipboard.` on macOS / Linux, and `Saved …png to Downloads (%USERPROFILE%\Downloads) + copied to clipboard.` on Windows. Multi-pane capture says `Saved N screenshots to Downloads; first copied to clipboard.` Path is the OS default the webview uses — the extension can't query the exact path the user picked in a Save As dialog.
+- **Bumped `engines.tedi` to `>=0.2.20`** because compact buttons rely on the new core manifest flag. Older TEDI builds will reject the install with a clear engines-mismatch message; downgrade the extension to 0.2.0 if you're stuck on TEDI 0.2.15-0.2.19.
+
 ## [0.2.0] - 2026-05-23
 
 ### Changed

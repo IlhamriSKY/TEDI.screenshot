@@ -1,12 +1,16 @@
 # TEDI Terminal Screenshot
 
 Companion extension for [TEDI](https://github.com/IlhamriSKY/TEDI) that
-adds a **Screenshot** button to the status-bar right cluster (next to
+adds a compact camera icon to the status-bar right cluster (next to
 **Open AI Agent**). Click it to drop a small picker right above the
-button — pick a specific terminal by its tab number, or capture every
+icon — pick a specific terminal by its tab number, or capture every
 visible pane in one go. The resulting PNG is copied to your clipboard
-*and* offered as a download, so you can paste it straight into a chat
-or save it to disk.
+*and* saved to your Downloads folder, so you can paste it straight
+into a chat or open it from disk.
+
+The status-bar entry is icon-only (no text label, no `Ctrl+Alt+S`
+chip) — opting into TEDI core's `panels[].compact: true` manifest
+flag, added in TEDI 0.2.20. Older TEDI builds keep the text label.
 
 <p align="center">
   <img src="logo.png" alt="Terminal Screenshot" width="128" />
@@ -198,10 +202,16 @@ clipboard + the webview's own download mechanism.
 
 ## Compatibility
 
-Requires TEDI **>= 0.2.15** for the `ctx.registerPanelRenderer` host
-API and the `surface: "right"` panel contribution. Older TEDI builds
-fire a single warning toast at activate, name the missing API, and
-stay idle so disable / uninstall still tears down cleanly.
+Requires TEDI **>= 0.2.20** for the `panels[].compact: true` manifest
+flag that turns the auto-rendered status-bar toggle into an icon-only
+square. Older TEDI builds (0.2.15-0.2.19) accept the install but fall
+back to the text + `<Kbd>` chip variant; pin to extension `0.2.0` if
+you're stuck on those.
+
+If a missing host API at runtime breaks anything else, the extension
+fires a single warning toast at activate, names the missing function
+(e.g. `ctx.registerPanelRenderer` or `ctx.panel.toggle`), and stays
+idle so disable / uninstall still tears down cleanly.
 
 The capture path itself relies on three browser features all current
 TEDI webviews ship:
@@ -235,6 +245,6 @@ LICENSE`, and uploads to the GitHub release that TEDI's installer
 reads from `releases/latest`.
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.2.1
+git push origin v0.2.1
 ```
