@@ -1,0 +1,55 @@
+{
+  "id": "tedi.terminal-screenshot",
+  "name": "Terminal Screenshot",
+  "version": "0.2.0",
+  "description": "Adds a Screenshot button to TEDI's status bar. Click it to open a dropdown listing every visible terminal by its TabBar number (same Terminal N badge you see in the tab strip) plus a Capture-all entry; each selection saves a PNG to disk and copies it to the clipboard. Rebindable shortcut: Ctrl+Alt+S opens the dropdown, Ctrl+Alt+C captures the focused terminal directly.",
+  "author": "IlhamRiski - ilhamriski.com",
+  "homepage": "https://github.com/IlhamriSKY/TEDI.terminal-screenshot",
+  "icon": "logo.png",
+  "main": "extension.js",
+  "permissions": [
+    "panels:register",
+    "ui:toast"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "tedi.terminal-screenshot.toggle",
+        "title": "Toggle Screenshot Panel",
+        "category": "Terminal Screenshot"
+      },
+      {
+        "id": "tedi.terminal-screenshot.captureActive",
+        "title": "Capture Focused Terminal",
+        "category": "Terminal Screenshot"
+      },
+      {
+        "id": "tedi.terminal-screenshot.captureAll",
+        "title": "Capture All Visible Terminals",
+        "category": "Terminal Screenshot"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "tedi.terminal-screenshot.toggle",
+        "key": "Mod+Alt+S"
+      },
+      {
+        "command": "tedi.terminal-screenshot.captureActive",
+        "key": "Mod+Alt+C"
+      }
+    ],
+    "panels": [
+      {
+        "id": "screenshot",
+        "title": "Screenshot",
+        "surface": "right",
+        "icon": "logo.png",
+        "defaultOpen": false,
+        "toggleCommand": "tedi.terminal-screenshot.toggle",
+        "hideHostHeader": true
+      }
+    ]
+  },
+  "engines": { "tedi": ">=0.2.15" }
+}
