@@ -1,114 +1,58 @@
-// Terminal Screenshot — composites xterm.js canvas layers under each
-// `[data-terminal-leaf-id]` element into a single PNG. Copies the
-// result to the system clipboard and offers a blob-URL download so
-// the user can save anywhere the OS file dialog lets them.
+// Screenshot - captures the entire TEDI window in one click.
 //
-// UI model: clicking the status-bar "Screenshot" button opens a
-// floating dropdown directly above the button (NOT the host's
-// right-panel slot). The dropdown lists every visible terminal by
-// its TabBar ordinal — same "Terminal N" number the user sees in the
-// tab strip — plus a "Capture all" entry. The keybindings still work
-// for power users who want one-shot capture without the dropdown.
+// The previous version composited xterm.js canvases on the JS side,
+// which left WebGL panes black whenever the renderer's drawing buffer
+// was empty for the current frame (preserveDrawingBuffer = false). This
+// rewrite delegates to the host's `app_capture_window` Tauri command,
+// which uses `xcap` to grab the OS-composited frame - same pixels the
+// user sees, no repaint dance required.
 //
-// Why hijack the button click instead of using the panel slot?
-//   * The user asked for a dropdown, not a sidebar slice. TEDI's
-//     `surface: "right"` panels always open the ~22% wide right
-//     slot, which is wrong here — the picker is a transient menu.
-//   * The status-bar button is still auto-rendered from the
-//     `contributes.panels[]` entry (no other host API exists to put
-//     a clickable button there). To redirect it, we attach a
-//     capture-phase click listener on `document` and call
-//     `stopImmediatePropagation()` before React's bubble-phase
-//     `onClick` opens the panel. As a safety net, the panel
-//     renderer itself just closes the panel and re-opens the
-//     dropdown — so even if the hijack misses the first click, the
-//     user still ends up at the right place.
-//
-// Why DOM-side composition instead of a Tauri-side capture?
-//   * TEDI ships no `fs_write_bytes` command and the default
-//     capability does not expose `dialog:allow-save` either, so the
-//     extension can't go through Rust to write binary. The webview's
-//     own `<a download>` mechanism + clipboard API cover both
-//     storage paths without asking the host for new permissions.
-//   * The render layers we want are already in the DOM (xterm's
-//     WebGL canvas + the addon selection/cursor canvases), so the
-//     extension never has to ask the host for terminal access.
-//
-// What "visible" means here: TEDI's `TerminalPane` toggles inline
-// `visibility: hidden` on inactive tabs, so hidden panes' WebGL
-// buffers are stale. We only capture panes whose nearest
-// `[data-terminal-leaf-id]` element is currently visible, which
-// matches what the user actually sees on screen.
+// UI model: the status-bar "Screenshot" button is a single trigger. No
+// dropdown, no per-tab picker. The keybinding (Mod+Alt+S) runs the same
+// capture path so power users skip the click entirely.
 
 const PANEL_ID = "screenshot";
 const PANEL_TITLE = "Screenshot";
-const CMD_TOGGLE = "tedi.terminal-screenshot.toggle";
-const CMD_CAPTURE_ACTIVE = "tedi.terminal-screenshot.captureActive";
-const CMD_CAPTURE_ALL = "tedi.terminal-screenshot.captureAll";
+const CMD_CAPTURE = "tedi.screenshot.capture";
 
-/** Unique selector for the auto-rendered status-bar toggle button. The
- *  host renders the button with `aria-label={panel.title}`; scoping to
- *  the status-bar `<footer>` keeps us from picking up any other element
- *  that happens to carry the same aria-label. */
+/** Scoped to the status-bar `<footer>` so we don't pick up any other
+ *  element that happens to carry the same aria-label. */
 const BUTTON_SELECTOR = `footer button[aria-label="${PANEL_TITLE}"]`;
 
 let ctx = null;
-let dropdownEl = null;
-let outsideHandler = null;
-let keyHandler = null;
 let captureHandler = null;
-let resizeHandler = null;
+let busy = false;
 
 export async function activate(context) {
   ctx = context;
 
-  // Match the Discord / Secondary Folder Tree pattern: probe the host
-  // APIs we need up front. If a method is missing the user is on an
-  // older TEDI; surface one warning toast and stay activated-but-idle
-  // so disable/uninstall still tears down cleanly.
   const missing = [];
+  if (typeof ctx.invoke !== "function") missing.push("ctx.invoke");
   if (typeof ctx.registerPanelRenderer !== "function") missing.push("ctx.registerPanelRenderer");
-  if (typeof ctx.panel?.toggle !== "function") missing.push("ctx.panel.toggle");
   if (typeof ctx.panel?.close !== "function") missing.push("ctx.panel.close");
   if (missing.length > 0) {
-    const msg = `Terminal Screenshot needs a newer TEDI (missing: ${missing.join(", ")}).`;
+    const msg = `Screenshot needs a newer TEDI (missing: ${missing.join(", ")}).`;
     ctx.logger?.warn?.(msg);
     safeToast(msg, "warning");
     return;
   }
 
-  // Toggle command: bound to `Mod+Alt+S` by the manifest. We *don't*
-  // call `ctx.panel.toggle` here — that would open the right-slot.
-  // Instead toggle the floating dropdown directly so the keybinding
-  // path mirrors the click path.
-  ctx.registerCommandHandler(CMD_TOGGLE, () => {
-    toggleDropdown();
+  // Keybinding path: Mod+Alt+S. Runs the same capture as the click.
+  ctx.registerCommandHandler(CMD_CAPTURE, async () => {
+    await runCapture();
   });
 
-  // Direct-capture commands. Wired to keybindings so power users
-  // never have to open the dropdown — `Mod+Alt+C` snaps the focused
-  // terminal in one keystroke.
-  ctx.registerCommandHandler(CMD_CAPTURE_ACTIVE, async () => {
-    await runCapture("active");
-  });
-  ctx.registerCommandHandler(CMD_CAPTURE_ALL, async () => {
-    await runCapture("all");
-  });
-
-  // Capture-phase listener that runs BEFORE React's bubble-phase
-  // onClick handler (which would open the right-slot panel). React 18
-  // attaches handlers to its root container in the bubble phase, so a
-  // document-level capture listener always wins.
+  // Click path: intercept the host's auto-rendered status-bar button so
+  // the click never opens the right-slot panel. Capture-phase listener
+  // runs BEFORE React's bubble-phase onClick handler.
   captureHandler = (event) => {
     const target = event.target instanceof Element ? event.target : null;
     if (!target) return;
     const btn = target.closest(BUTTON_SELECTOR);
     if (!btn) return;
-    // Block the host's `useRightPanelStore.toggle` so the side panel
-    // never opens.
     event.stopImmediatePropagation();
     event.preventDefault();
-    toggleDropdown(btn);
+    void runCapture();
   };
   document.addEventListener("click", captureHandler, true);
   ctx.addDisposer(() => {
@@ -118,31 +62,10 @@ export async function activate(context) {
     }
   });
 
-  // Reposition (or hide) the dropdown when the layout changes so it
-  // never floats over the wrong spot after a window resize / panel
-  // reflow.
-  resizeHandler = () => {
-    if (!dropdownEl) return;
-    const btn = document.querySelector(BUTTON_SELECTOR);
-    if (!btn) {
-      closeDropdown();
-      return;
-    }
-    positionDropdown(dropdownEl, btn);
-  };
-  window.addEventListener("resize", resizeHandler);
-  ctx.addDisposer(() => {
-    if (resizeHandler) {
-      window.removeEventListener("resize", resizeHandler);
-      resizeHandler = null;
-    }
-  });
-
-  // Safety net for the right-panel slot. If the user's click ever
-  // slips past `captureHandler` (e.g. another extension calls
-  // `panel.toggle` programmatically), the host mounts this renderer.
-  // We close the panel on the next frame and pop the dropdown
-  // instead — same destination, one extra frame.
+  // Safety net for the right-panel slot. If the user's click ever slips
+  // past `captureHandler` (e.g. another extension calls `panel.toggle`
+  // programmatically), the host mounts this renderer. We close the
+  // panel on the next frame and trigger the capture instead.
   const disposeRenderer = ctx.registerPanelRenderer(PANEL_ID, (container) => {
     container.replaceChildren();
     const note = document.createElement("div");
@@ -150,28 +73,21 @@ export async function activate(context) {
     note.style.color = "var(--muted-foreground)";
     note.style.fontSize = "12px";
     note.style.lineHeight = "1.5";
-    note.textContent =
-      "Opening the Screenshot menu — look for the dropdown above the status bar.";
+    note.textContent = "Capturing TEDI window...";
     container.appendChild(note);
-
-    // Defer one frame so React finishes mounting the right slot
-    // before we yank it shut, then anchor the dropdown to the now-
-    // re-rendered toggle button.
     requestAnimationFrame(() => {
       try {
         ctx?.panel?.close(PANEL_ID);
       } catch {
         // ignore
       }
-      const btn = document.querySelector(BUTTON_SELECTOR);
-      if (btn instanceof HTMLElement) showDropdown(btn);
+      void runCapture();
     });
-
     return () => {
       try {
         container.replaceChildren();
       } catch {
-        // ignore — host clears the host-owned wrapper too anyway.
+        // ignore
       }
     };
   });
@@ -179,445 +95,37 @@ export async function activate(context) {
 }
 
 export function deactivate() {
-  closeDropdown();
   ctx = null;
 }
 
-/* ------------------------------------------------------------------ */
-/* Dropdown                                                           */
-/* ------------------------------------------------------------------ */
-
-function toggleDropdown(anchor) {
-  if (dropdownEl) {
-    closeDropdown();
-    return;
-  }
-  const btn = anchor instanceof HTMLElement ? anchor : document.querySelector(BUTTON_SELECTOR);
-  if (!(btn instanceof HTMLElement)) {
-    // Button hasn't mounted yet (extension just activated, status
-    // bar still rendering). Direct-capture the focused terminal as
-    // a useful fallback so the keystroke isn't wasted.
-    void runCapture("active");
-    return;
-  }
-  showDropdown(btn);
-}
-
-function showDropdown(anchor) {
-  closeDropdown();
-
-  const root = document.createElement("div");
-  root.setAttribute("data-tedi-terminal-screenshot-dropdown", "");
-  root.tabIndex = -1;
-  // Styled to match TEDI's tooltip / popover look so the dropdown
-  // reads as part of the host UI rather than an extension island.
-  Object.assign(root.style, {
-    position: "fixed",
-    zIndex: "9999",
-    minWidth: "240px",
-    maxWidth: "320px",
-    maxHeight: "min(60vh, 420px)",
-    overflow: "auto",
-    background: "var(--popover, var(--card))",
-    color: "var(--popover-foreground, var(--foreground))",
-    border: "1px solid var(--border)",
-    borderRadius: "8px",
-    boxShadow: "0 10px 24px rgba(0, 0, 0, 0.28)",
-    padding: "4px",
-    fontSize: "12px",
-    lineHeight: "1.4",
-  });
-
-  const terminals = enumerateTerminals();
-  renderDropdownContents(root, terminals);
-
-  document.body.appendChild(root);
-  positionDropdown(root, anchor);
-  dropdownEl = root;
-
-  // Outside click closes. `mousedown` (not `click`) so the dropdown
-  // dismisses before the click lands on whatever the user actually
-  // wanted to interact with.
-  outsideHandler = (event) => {
-    const t = event.target instanceof Element ? event.target : null;
-    if (!t) return;
-    if (root.contains(t)) return;
-    if (t.closest(BUTTON_SELECTOR)) return; // toggle handler owns this
-    closeDropdown();
-  };
-  document.addEventListener("mousedown", outsideHandler, true);
-
-  keyHandler = (event) => {
-    if (event.key === "Escape") {
-      event.stopPropagation();
-      closeDropdown();
+async function runCapture() {
+  if (busy) return;
+  busy = true;
+  try {
+    const base64Png = await ctx.invoke("app_capture_window");
+    if (typeof base64Png !== "string" || base64Png.length === 0) {
+      safeToast("Capture returned an empty image.", "error");
+      return;
     }
-  };
-  document.addEventListener("keydown", keyHandler, true);
-}
+    const blob = base64ToBlob(base64Png, "image/png");
+    const name = `tedi-${formatStamp(new Date())}.png`;
 
-function closeDropdown() {
-  if (dropdownEl) {
-    try {
-      dropdownEl.remove();
-    } catch {
-      // ignore
-    }
-    dropdownEl = null;
-  }
-  if (outsideHandler) {
-    document.removeEventListener("mousedown", outsideHandler, true);
-    outsideHandler = null;
-  }
-  if (keyHandler) {
-    document.removeEventListener("keydown", keyHandler, true);
-    keyHandler = null;
-  }
-}
+    await tryClipboard(blob);
+    triggerDownload(blob, name);
 
-function positionDropdown(root, anchor) {
-  const rect = anchor.getBoundingClientRect();
-  const GAP = 6;
-  // Pin the dropdown's right edge under the button's right edge and
-  // float it above the status bar. Using `right`/`bottom` keeps the
-  // popover anchored when the window resizes.
-  const right = Math.max(8, window.innerWidth - rect.right);
-  const bottom = Math.max(8, window.innerHeight - rect.top + GAP);
-  root.style.right = `${right}px`;
-  root.style.bottom = `${bottom}px`;
-  root.style.left = "auto";
-  root.style.top = "auto";
-}
-
-function renderDropdownContents(root, terminals) {
-  // "Capture all visible terminals" sits at the top, only when there
-  // is actually more than one pane to capture. With a single terminal
-  // it is a duplicate of the per-terminal entry below.
-  if (terminals.length > 1) {
-    root.appendChild(
-      makeRow({
-        primary: "Capture all visible terminals",
-        secondary: `${terminals.length} panes`,
-        onSelect: async () => {
-          closeDropdown();
-          await runCapture("all");
-        },
-      }),
-    );
-    root.appendChild(makeDivider());
-  }
-
-  if (terminals.length === 0) {
-    const empty = document.createElement("div");
-    empty.style.padding = "10px 12px";
-    empty.style.color = "var(--muted-foreground)";
-    empty.textContent = "No visible terminal to capture.";
-    root.appendChild(empty);
-    return;
-  }
-
-  for (const t of terminals) {
-    root.appendChild(
-      makeRow({
-        ordinal: t.ordinal,
-        primary: t.ordinal != null ? `Terminal ${t.ordinal}` : "Terminal",
-        secondary: t.label || undefined,
-        focused: t.focused,
-        onSelect: async () => {
-          closeDropdown();
-          await runCaptureElement(t.element);
-        },
-      }),
-    );
-  }
-}
-
-function makeDivider() {
-  const hr = document.createElement("div");
-  hr.style.height = "1px";
-  hr.style.margin = "4px 6px";
-  hr.style.background = "var(--border)";
-  return hr;
-}
-
-function makeRow({ ordinal, primary, secondary, focused, onSelect }) {
-  const btn = document.createElement("button");
-  btn.type = "button";
-  Object.assign(btn.style, {
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-    width: "100%",
-    padding: "8px 10px",
-    border: "0",
-    background: "transparent",
-    color: "inherit",
-    textAlign: "left",
-    font: "inherit",
-    borderRadius: "6px",
-    cursor: "pointer",
-    transition: "background 100ms",
-  });
-  btn.onmouseenter = () => {
-    btn.style.background = "var(--accent)";
-    btn.style.color = "var(--accent-foreground, var(--foreground))";
-  };
-  btn.onmouseleave = () => {
-    btn.style.background = "transparent";
-    btn.style.color = "inherit";
-  };
-  btn.onclick = () => {
-    void onSelect();
-  };
-
-  if (typeof ordinal === "number") {
-    const badge = document.createElement("span");
-    badge.textContent = String(ordinal);
-    // Same look as TEDI's `TerminalOrdinalBadge`: muted background,
-    // tabular numerals, small monospaced text.
-    Object.assign(badge.style, {
-      display: "inline-flex",
-      alignItems: "center",
-      justifyContent: "center",
-      minWidth: "22px",
-      padding: "2px 6px",
-      borderRadius: "4px",
-      background: "var(--muted, rgba(127,127,127,0.18))",
-      color: "var(--muted-foreground, inherit)",
-      fontFamily: "var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)",
-      fontSize: "10px",
-      fontWeight: "600",
-      fontVariantNumeric: "tabular-nums",
-    });
-    btn.appendChild(badge);
-  }
-
-  const labels = document.createElement("span");
-  labels.style.display = "flex";
-  labels.style.flexDirection = "column";
-  labels.style.minWidth = "0";
-  labels.style.flex = "1";
-
-  const top = document.createElement("span");
-  top.textContent = primary;
-  top.style.whiteSpace = "nowrap";
-  top.style.overflow = "hidden";
-  top.style.textOverflow = "ellipsis";
-  labels.appendChild(top);
-
-  if (secondary) {
-    const sub = document.createElement("span");
-    sub.textContent = secondary;
-    sub.style.color = "var(--muted-foreground)";
-    sub.style.fontSize = "11px";
-    sub.style.whiteSpace = "nowrap";
-    sub.style.overflow = "hidden";
-    sub.style.textOverflow = "ellipsis";
-    labels.appendChild(sub);
-  }
-
-  btn.appendChild(labels);
-
-  if (focused) {
-    const tag = document.createElement("span");
-    tag.textContent = "focused";
-    Object.assign(tag.style, {
-      color: "var(--muted-foreground)",
-      fontSize: "10px",
-      textTransform: "uppercase",
-      letterSpacing: "0.04em",
-      padding: "2px 6px",
-      border: "1px solid var(--border)",
-      borderRadius: "999px",
-    });
-    btn.appendChild(tag);
-  }
-
-  return btn;
-}
-
-/* ------------------------------------------------------------------ */
-/* Terminal enumeration                                               */
-/* ------------------------------------------------------------------ */
-
-/**
- * Returns every visible terminal pane, decorated with the FIFO ordinal
- * shown in the tab strip and its display label. The ordinal mapping
- * comes from walking `TabsTrigger` elements (`[data-entry-key^="leaf-"]`)
- * whose `<TerminalOrdinalBadge>` carries `aria-label="Terminal N"`.
- * Persisted across restarts by TEDI core, so the number stays stable.
- */
-function enumerateTerminals() {
-  const ordinalByLeaf = buildLeafOrdinalMap();
-  const focusedEl = document.activeElement?.closest?.("[data-terminal-leaf-id]") ?? null;
-
-  const out = [];
-  const panes = document.querySelectorAll("[data-terminal-leaf-id]");
-  for (const el of panes) {
-    if (!(el instanceof HTMLElement)) continue;
-    if (!isVisible(el)) continue;
-    const idAttr = el.getAttribute("data-terminal-leaf-id") ?? "";
-    const leafId = Number(idAttr);
-    const meta = Number.isFinite(leafId) ? ordinalByLeaf.get(leafId) : undefined;
-    out.push({
-      element: el,
-      leafId,
-      ordinal: meta?.ordinal,
-      label: meta?.label ?? "",
-      focused: el === focusedEl,
-    });
-  }
-  // Sort by ordinal so the dropdown matches the tab strip's order;
-  // unknown ordinals (newly opened, mapping not yet built) trail.
-  out.sort((a, b) => {
-    if (a.ordinal == null && b.ordinal == null) return 0;
-    if (a.ordinal == null) return 1;
-    if (b.ordinal == null) return -1;
-    return a.ordinal - b.ordinal;
-  });
-  return out;
-}
-
-function buildLeafOrdinalMap() {
-  /** @type {Map<number, { ordinal: number; label: string }>} */
-  const out = new Map();
-  const triggers = document.querySelectorAll('[data-entry-key^="leaf-"]');
-  for (const t of triggers) {
-    const key = t.getAttribute("data-entry-key") ?? "";
-    const id = Number(key.slice("leaf-".length));
-    if (!Number.isFinite(id)) continue;
-    const badge = t.querySelector('[aria-label^="Terminal "]');
-    if (!badge) continue;
-    const match = /^Terminal (\d+)$/.exec(badge.getAttribute("aria-label") ?? "");
-    if (!match) continue;
-    const ordinal = Number(match[1]);
-    // Tab label sits in the only `.truncate` span inside the entry.
-    // Fall back to whatever the trigger's text is, minus the badge.
-    let label = "";
-    const labelSpan = t.querySelector(".truncate");
-    if (labelSpan) label = labelSpan.textContent?.trim() ?? "";
-    if (!label) {
-      const text = (t.textContent ?? "").trim();
-      label = text.replace(/^\d+\s*/, "");
-    }
-    out.set(id, { ordinal, label });
-  }
-  return out;
-}
-
-function findActiveTerminal() {
-  const fromFocus = document.activeElement?.closest?.("[data-terminal-leaf-id]");
-  if (fromFocus instanceof HTMLElement && isVisible(fromFocus)) {
-    return fromFocus;
-  }
-  const all = document.querySelectorAll("[data-terminal-leaf-id]");
-  for (const el of all) {
-    if (el instanceof HTMLElement && isVisible(el)) return el;
-  }
-  return null;
-}
-
-function findVisibleTerminals() {
-  const all = Array.from(document.querySelectorAll("[data-terminal-leaf-id]"));
-  return all.filter((el) => el instanceof HTMLElement && isVisible(el));
-}
-
-function isVisible(el) {
-  // `TerminalPane` toggles inline `visibility: hidden` on inactive
-  // tabs. That's a stronger signal than computed style (which also
-  // catches CSS-only hides we don't care about here) and matches
-  // exactly what the user sees.
-  if (el.style.visibility === "hidden") return false;
-  const r = el.getBoundingClientRect();
-  return r.width > 4 && r.height > 4;
-}
-
-/* ------------------------------------------------------------------ */
-/* Capture pipeline                                                   */
-/* ------------------------------------------------------------------ */
-
-async function runCapture(mode /* "active" | "all" */) {
-  let targets;
-  if (mode === "active") {
-    const one = findActiveTerminal();
-    targets = one ? [one] : [];
-  } else {
-    targets = findVisibleTerminals();
-  }
-  await captureMany(targets);
-}
-
-async function runCaptureElement(el) {
-  if (!(el instanceof HTMLElement) || !isVisible(el)) {
-    safeToast("That terminal is no longer visible.", "warning");
-    return;
-  }
-  await captureMany([el]);
-}
-
-async function captureMany(targets) {
-  if (!targets || targets.length === 0) {
-    safeToast("No visible terminal to capture.", "warning");
-    return;
-  }
-
-  const stamp = formatStamp(new Date());
-  const ordinalByLeaf = buildLeafOrdinalMap();
-  const shots = []; // { blob, name }
-
-  for (const target of targets) {
-    try {
-      const { blob } = await captureElement(target);
-      if (!blob) continue;
-      const leafId = Number(target.getAttribute("data-terminal-leaf-id") ?? "0");
-      const ordinal = ordinalByLeaf.get(leafId)?.ordinal;
-      const labelPart = ordinal != null ? `terminal-${ordinal}` : `leaf-${leafId}`;
-      const name = `tedi-${labelPart}-${stamp}.png`;
-      shots.push({ blob, name });
-    } catch (err) {
-      ctx?.logger?.error?.("capture failed", err);
-    }
-  }
-
-  if (shots.length === 0) {
-    safeToast("Capture produced an empty image.", "error");
-    return;
-  }
-
-  // Clipboard takes the first frame so multi-pane capture still has
-  // a one-paste path. Per-pane files are still produced via the
-  // download anchor below.
-  await tryClipboard(shots[0].blob);
-
-  // One download per capture. The webview's anchor handler resolves
-  // each click against its own save flow (WebView2: Save As prompt,
-  // WKWebView / WebKitGTK: routed to ~/Downloads). Space them out by
-  // a tick so the host doesn't coalesce simultaneous clicks.
-  for (let i = 0; i < shots.length; i++) {
-    triggerDownload(shots[i].blob, shots[i].name);
-    if (i < shots.length - 1) {
-      await sleep(80);
-    }
-  }
-
-  const where = describeSaveLocation();
-  if (shots.length === 1) {
-    safeToast(`Saved ${shots[0].name} to ${where} + copied to clipboard.`, "success");
-  } else {
     safeToast(
-      `Saved ${shots.length} screenshots to ${where}; first copied to clipboard.`,
+      `Saved ${name} to ${describeSaveLocation()} + copied to clipboard.`,
       "success",
     );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    ctx?.logger?.error?.("capture failed", err);
+    safeToast(`Capture failed: ${msg}`, "error");
+  } finally {
+    busy = false;
   }
 }
 
-/**
- * Best-effort human-readable hint for where the webview just dropped the
- * PNG. The actual path the OS uses is owned by the webview (WebView2 /
- * WKWebView / WebKitGTK) — we can't query it without new host APIs — so
- * we name the most likely default per platform. Helps the user find the
- * file when the toast disappears.
- */
 function describeSaveLocation() {
   const platform = ctx?.os?.platform;
   if (platform === "windows") return "Downloads (%USERPROFILE%\\Downloads)";
@@ -626,198 +134,15 @@ function describeSaveLocation() {
   return "your Downloads folder";
 }
 
-/**
- * Paints every `<canvas>` under the terminal element onto a fresh
- * 2D canvas at device-pixel resolution. Steps, in order:
- *
- *   1. If the user's theme paints a wallpaper (`#tedi-bg-layer`), copy
- *      that into the output first so the PNG reflects what's actually on
- *      screen — terminal cells are semi-transparent over the wallpaper
- *      when `--tedi-canvas-alpha` < 1.
- *   2. Paint the terminal's background colour over the wallpaper (this
- *      respects the theme; xterm renders cells semi-transparent over
- *      the same background).
- *   3. Force xterm to repaint by dispatching a `resize` event, then
- *      wait two animation frames. xterm's WebGL renderer keeps its
- *      drawing buffer for the current frame only; without the nudge,
- *      `drawImage(webglCanvas)` reads an empty (black) buffer and the
- *      whole PNG comes out solid black — the user-reported "ss filenya
- *      gelap" bug.
- *   4. Composite every child canvas in document order (text layer
- *      first, then cursor/selection overlay).
- */
-async function captureElement(el) {
-  const rect = el.getBoundingClientRect();
-  const dpr = window.devicePixelRatio || 1;
-  const width = Math.max(1, Math.round(rect.width * dpr));
-  const height = Math.max(1, Math.round(rect.height * dpr));
-
-  const out = document.createElement("canvas");
-  out.width = width;
-  out.height = height;
-  const ctx2d = out.getContext("2d");
-  if (!ctx2d) return { blob: null };
-
-  // 1. Wallpaper layer (if the user enabled a theme background).
-  await paintWallpaper(ctx2d, el, rect, dpr, width, height);
-
-  // 2. Terminal background colour. With `--tedi-canvas-alpha` < 1 this
-  //    is the same semi-transparent fill the live terminal uses, so the
-  //    wallpaper bleeds through identically to what's on screen.
-  const bgHost = el.querySelector(".xterm-viewport, .xterm") ?? el;
-  const bg = readBackground(bgHost);
-  if (bg) {
-    ctx2d.fillStyle = bg;
-    ctx2d.fillRect(0, 0, width, height);
+function base64ToBlob(b64, mime) {
+  const binary = atob(b64);
+  const len = binary.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binary.charCodeAt(i);
   }
-
-  // 3. Nudge xterm to repaint. The WebGL renderer's
-  //    `preserveDrawingBuffer` is FALSE upstream, so after the browser
-  //    composites a frame the buffer is gone. Dispatching a `resize`
-  //    event triggers xterm's ResizeObserver-driven redraw; the next
-  //    rAF puts us inside the frame where the buffer is fresh.
-  try {
-    window.dispatchEvent(new Event("resize"));
-  } catch {
-    // Some environments throw on synthetic events; ignore.
-  }
-  await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
-  await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
-
-  // 4. Composite child canvases. Source-over default keeps cursor and
-  //    selection layers visible over the text layer.
-  const canvases = el.querySelectorAll("canvas");
-  for (const c of canvases) {
-    const cr = c.getBoundingClientRect();
-    const dx = (cr.left - rect.left) * dpr;
-    const dy = (cr.top - rect.top) * dpr;
-    const dw = cr.width * dpr;
-    const dh = cr.height * dpr;
-    try {
-      ctx2d.drawImage(c, dx, dy, dw, dh);
-    } catch {
-      // `drawImage` can throw on a WebGL canvas whose buffer was wiped
-      // (the GPU just reclaimed it). Skip and continue; the remaining
-      // layers + wallpaper still give a useful image instead of black.
-    }
-  }
-
-  const blob = await new Promise((resolve) => out.toBlob(resolve, "image/png"));
-  return { blob };
+  return new Blob([bytes], { type: mime });
 }
-
-/**
- * Mirrors the live `#tedi-bg-layer` div onto the capture canvas. The
- * wallpaper is set as a CSS `background-image: url(...)` so we extract
- * the URL, load it as an `<img>`, then paint it stretched to fill, with
- * the user-configured blur + darken filters applied via `ctx.filter`.
- * Silently no-ops when no wallpaper is set or the image fails to load
- * — the terminal background colour painted next is still a reasonable
- * fallback.
- */
-async function paintWallpaper(ctx2d, paneEl, paneRect, dpr, width, height) {
-  const layer = document.getElementById("tedi-bg-layer");
-  if (!(layer instanceof HTMLElement)) return;
-  const cs = getComputedStyle(layer);
-  // Skip when the layer is hidden (display:none, visibility:hidden, or
-  // background-image: none).
-  if (cs.display === "none" || cs.visibility === "hidden") return;
-  const bgImage = cs.backgroundImage;
-  if (!bgImage || bgImage === "none") return;
-  // `background-image` is "url(...)" potentially preceded by a
-  // linear-gradient (darken overlay). The actual image URL is the LAST
-  // url() entry; everything before it is overlay.
-  const urlMatches = [...bgImage.matchAll(/url\((['"]?)(.*?)\1\)/g)];
-  const lastUrl = urlMatches.length > 0 ? urlMatches[urlMatches.length - 1][2] : null;
-  if (!lastUrl) return;
-
-  let img;
-  try {
-    img = await loadImage(lastUrl);
-  } catch {
-    return;
-  }
-
-  // Match CSS `background-size: cover` semantics: scale the image so it
-  // covers the pane rect while preserving aspect ratio.
-  const iw = img.naturalWidth || img.width;
-  const ih = img.naturalHeight || img.height;
-  if (!iw || !ih) return;
-  // CSS bg layer covers the entire window; clip to the pane region.
-  const winW = window.innerWidth;
-  const winH = window.innerHeight;
-  const scale = Math.max(winW / iw, winH / ih);
-  const drawW = iw * scale;
-  const drawH = ih * scale;
-  // Centred per CSS `background-position: center`.
-  const drawX = (winW - drawW) / 2;
-  const drawY = (winH - drawH) / 2;
-  // Convert window-coordinates to pane-relative DPR pixels.
-  const srcX = paneRect.left - drawX;
-  const srcY = paneRect.top - drawY;
-
-  // Apply the same blur the live layer uses. Darken from `linear-gradient
-  // (rgba(0,0,0,X), ...)` is read separately because `ctx.filter` doesn't
-  // support overlay tints.
-  const blurMatch = /blur\(([0-9.]+)px\)/.exec(cs.filter || "");
-  const blur = blurMatch ? parseFloat(blurMatch[1]) : 0;
-  if (blur > 0) ctx2d.filter = `blur(${blur * dpr}px)`;
-  try {
-    ctx2d.drawImage(
-      img,
-      srcX / scale,
-      srcY / scale,
-      paneRect.width / scale,
-      paneRect.height / scale,
-      0,
-      0,
-      width,
-      height,
-    );
-  } catch {
-    // CORS-tainted cross-origin URLs throw; ignore so the rest of the
-    // capture still runs.
-  }
-  ctx2d.filter = "none";
-
-  // Re-apply the darken overlay if present. Extracted from the first
-  // linear-gradient layer in the computed background-image.
-  const darkMatch = /linear-gradient\(rgba\(0,\s*0,\s*0,\s*([0-9.]+)\)/.exec(bgImage);
-  const dark = darkMatch ? parseFloat(darkMatch[1]) : 0;
-  if (dark > 0) {
-    ctx2d.fillStyle = `rgba(0, 0, 0, ${dark})`;
-    ctx2d.fillRect(0, 0, width, height);
-  }
-}
-
-function loadImage(url) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    // Allow CORS-anonymous loads so cross-origin wallpapers from CDNs
-    // can be drawn onto a canvas without tainting it.
-    img.crossOrigin = "anonymous";
-    img.onload = () => resolve(img);
-    img.onerror = (err) => reject(err);
-    img.src = url;
-  });
-}
-
-function readBackground(el) {
-  try {
-    const c = getComputedStyle(el).backgroundColor;
-    if (c && c !== "rgba(0, 0, 0, 0)" && c !== "transparent") return c;
-  } catch {
-    // ignore
-  }
-  // Return null (not black) when no background can be read. Callers
-  // skip the fillRect when null so the wallpaper underneath stays
-  // visible — black-on-wallpaper would be the same bug we're fixing.
-  return null;
-}
-
-/* ------------------------------------------------------------------ */
-/* IO                                                                 */
-/* ------------------------------------------------------------------ */
 
 async function tryClipboard(blob) {
   if (!blob) return false;
@@ -845,7 +170,6 @@ function triggerDownload(blob, name) {
   try {
     a.click();
   } finally {
-    // Revoke after a tick so the click handler has time to read the URL.
     setTimeout(() => {
       try {
         a.remove();
@@ -871,8 +195,4 @@ function formatStamp(d) {
     `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` +
     `-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
   );
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

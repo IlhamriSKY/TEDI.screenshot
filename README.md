@@ -3,13 +3,13 @@
 Companion extension for [TEDI](https://github.com/IlhamriSKY/TEDI) that
 adds a compact camera icon to the status-bar right cluster (next to
 **Open AI Agent**). Click it to drop a small picker right above the
-icon — pick a specific terminal by its tab number, or capture every
+icon - pick a specific terminal by its tab number, or capture every
 visible pane in one go. The resulting PNG is copied to your clipboard
 *and* saved to your Downloads folder, so you can paste it straight
 into a chat or open it from disk.
 
 The status-bar entry is icon-only (no text label, no `Ctrl+Alt+S`
-chip) — opting into TEDI core's `panels[].compact: true` manifest
+chip) - opting into TEDI core's `panels[].compact: true` manifest
 flag, added in TEDI 0.2.20. Older TEDI builds keep the text label.
 
 <p align="center">
@@ -18,7 +18,7 @@ flag, added in TEDI 0.2.20. Older TEDI builds keep the text label.
 
 > [!NOTE]
 > The button auto-appears in the status bar's right cluster the moment
-> the extension activates — no manual layout wiring. A default shortcut
+> the extension activates - no manual layout wiring. A default shortcut
 > `Mod+Alt+S` opens the dropdown; `Mod+Alt+C` captures the focused
 > terminal without opening it (`C` for camera). Both are rebindable
 > from *Settings → Shortcuts → Extensions* under the **Terminal
@@ -33,7 +33,7 @@ In TEDI:
 
 1. Open **Settings → Extensions**.
 2. Switch to the **From GitHub** tab.
-3. Paste `IlhamriSKY/TEDI.terminal-screenshot` (or the full URL).
+3. Paste `IlhamriSKY/TEDI.screenshot` (or the full URL).
 4. Click **Review → Install**.
 
 That's it. No manual settings to flip. The extension registers a
@@ -78,7 +78,7 @@ the install pipeline against the new release. No manual download.
 ```
 
 The numbers on the left of each row are the **same `terminalOrdinal`
-values TEDI shows on its tab badges** — the FIFO chips persisted in
+values TEDI shows on its tab badges** - the FIFO chips persisted in
 the workspace store, identical to what the AI sees inside its per-turn
 `<env>` block. They survive split, reorder, move-to-group, and even a
 full workspace restart, so "Terminal 3" today is the same shell as
@@ -91,10 +91,10 @@ would just duplicate the entry below).
 
 Captured PNGs land in two places at once:
 
-- **Clipboard** — paste straight into Discord / Slack / a doc / an
+- **Clipboard** - paste straight into Discord / Slack / a doc / an
   issue. With multi-pane capture, the first frame is copied so you
   always have a one-paste fallback.
-- **Downloads** — one file per pane, named
+- **Downloads** - one file per pane, named
   `tedi-terminal-<N>-<YYYYMMDD-HHmmss>.png` where `N` matches the
   Terminal ordinal in the dropdown.
 
@@ -102,8 +102,8 @@ Captured PNGs land in two places at once:
 
 ## How it works
 
-TEDI's host doesn't ship a "status-bar popover" API — only
-right-side panels — but a `surface: "right"` panel is the *only* way
+TEDI's host doesn't ship a "status-bar popover" API - only
+right-side panels - but a `surface: "right"` panel is the *only* way
 to get a clickable button auto-rendered in the status bar. So the
 extension uses the panel mechanism for the button but redirects every
 click to a real floating dropdown:
@@ -134,7 +134,7 @@ on row click → captureElement(<the matching DOM node>)
 
 The click-hijack works because React 18 attaches its synthetic event
 handlers on the root container in the **bubble** phase, while we
-listen at `document` in the **capture** phase — capture runs first,
+listen at `document` in the **capture** phase - capture runs first,
 and `stopImmediatePropagation()` aborts the bubble dispatch before
 React's `onClick` (which would call `useRightPanelStore.toggle`) ever
 sees the event.
@@ -168,13 +168,13 @@ capture lands the real content.
 
 The webview is in charge of the actual save:
 
-- **Windows (WebView2)** — Edge's "Save As" prompt appears.
-- **macOS (WKWebView)** — silently routes to `~/Downloads`.
-- **Linux (WebKitGTK)** — silently routes to `~/Downloads` (or the
+- **Windows (WebView2)** - Edge's "Save As" prompt appears.
+- **macOS (WKWebView)** - silently routes to `~/Downloads`.
+- **Linux (WebKitGTK)** - silently routes to `~/Downloads` (or the
   XDG `XDG_DOWNLOAD_DIR` if configured).
 
 If the webview refuses the download for any reason, the PNG is still
-on the clipboard — paste it anywhere that accepts images.
+on the clipboard - paste it anywhere that accepts images.
 
 ---
 
@@ -191,7 +191,7 @@ Declared in `manifest.json`:
 
 | Permission                  | What it lets the extension do                                                                                |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `panels:register`           | Register a runtime renderer for the right-surface panel declared in `contributes.panels[]`. The host auto-renders the matching status-bar toggle button from the manifest. The renderer itself is only a safety-net redirect — the visible UI is a `document.body`-mounted floating dropdown. |
+| `panels:register`           | Register a runtime renderer for the right-surface panel declared in `contributes.panels[]`. The host auto-renders the matching status-bar toggle button from the manifest. The renderer itself is only a safety-net redirect - the visible UI is a `document.body`-mounted floating dropdown. |
 | `ui:toast`                  | Surface capture results ("Captured tedi-terminal-1-...png.", "Capture produced an empty image", etc).        |
 
 No filesystem, secret-keychain, network, or shell permissions are
@@ -225,8 +225,8 @@ TEDI webviews ship:
 ## Local development
 
 ```bash
-git clone https://github.com/IlhamriSKY/TEDI.terminal-screenshot.git
-cd TEDI.terminal-screenshot
+git clone https://github.com/IlhamriSKY/TEDI.screenshot.git
+cd screenshot
 
 # Package + install into TEDI to test:
 zip dev.zip manifest.json extension.js logo.png README.md CHANGELOG.md LICENSE
@@ -234,10 +234,10 @@ zip dev.zip manifest.json extension.js logo.png README.md CHANGELOG.md LICENSE
 ```
 
 After install, watch TEDI's dev-tools console (`Ctrl+Shift+I`) for
-`[ext:tedi.terminal-screenshot]` log lines (capture warnings, clipboard
+`[ext:screenshot]` log lines (capture warnings, clipboard
 errors, fallback redirects).
 
-Cut a release with a `vX.Y.Z` tag — the bundled
+Cut a release with a `vX.Y.Z` tag - the bundled
 [`.github/workflows/release.yml`](.github/workflows/release.yml)
 asserts the tag matches `manifest.version`, zips
 `manifest.json + extension.js + logo.png + README.md + CHANGELOG.md +

@@ -1,42 +1,29 @@
 {
-  "id": "tedi.terminal-screenshot",
-  "name": "Terminal Screenshot",
-  "version": "0.3.0",
-  "description": "Adds a compact camera icon to TEDI's status bar. Click it to open a dropdown listing every visible terminal by its TabBar number (same Terminal N badge you see in the tab strip) plus a Capture-all entry; each selection saves a PNG to your Downloads folder and copies it to the clipboard. Rebindable shortcut: Ctrl+Alt+S opens the dropdown, Ctrl+Alt+C captures the focused terminal directly.",
+  "id": "tedi.screenshot",
+  "name": "Screenshot",
+  "version": "0.4.0",
+  "description": "One-click capture of the entire TEDI window. Click the camera icon in the status bar (or press Ctrl+Alt+S) to save a PNG to your Downloads folder and copy it to the clipboard. Uses the native OS window-capture API, so WebGL terminal panes render correctly instead of coming out black.",
   "author": "IlhamRiski - ilhamriski.com",
-  "homepage": "https://github.com/IlhamriSKY/TEDI.terminal-screenshot",
+  "homepage": "https://github.com/IlhamriSKY/TEDI.screenshot",
   "icon": "logo.png",
   "main": "extension.js",
   "permissions": [
     "panels:register",
-    "ui:toast"
+    "ui:toast",
+    "invoke:app_capture_window"
   ],
   "contributes": {
     "commands": [
       {
-        "id": "tedi.terminal-screenshot.toggle",
-        "title": "Toggle Screenshot Panel",
-        "category": "Terminal Screenshot"
-      },
-      {
-        "id": "tedi.terminal-screenshot.captureActive",
-        "title": "Capture Focused Terminal",
-        "category": "Terminal Screenshot"
-      },
-      {
-        "id": "tedi.terminal-screenshot.captureAll",
-        "title": "Capture All Visible Terminals",
-        "category": "Terminal Screenshot"
+        "id": "tedi.screenshot.capture",
+        "title": "Capture TEDI window",
+        "category": "Screenshot"
       }
     ],
     "keybindings": [
       {
-        "command": "tedi.terminal-screenshot.toggle",
+        "command": "tedi.screenshot.capture",
         "key": "Mod+Alt+S"
-      },
-      {
-        "command": "tedi.terminal-screenshot.captureActive",
-        "key": "Mod+Alt+C"
       }
     ],
     "panels": [
@@ -46,7 +33,7 @@
         "surface": "right",
         "icon": "logo.png",
         "defaultOpen": false,
-        "toggleCommand": "tedi.terminal-screenshot.toggle",
+        "toggleCommand": "tedi.screenshot.capture",
         "hideHostHeader": true,
         "compact": true
       }

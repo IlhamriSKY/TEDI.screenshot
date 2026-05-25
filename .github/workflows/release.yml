@@ -60,7 +60,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          out="dist/tedi.terminal-screenshot-${{ steps.ver.outputs.version }}.zip"
+          out="dist/tedi.screenshot-${{ steps.ver.outputs.version }}.zip"
           # Only ship runtime files. README + CHANGELOG + LICENSE stay in the
           # repo but are bundled too so the install card shows the right
           # metadata.
