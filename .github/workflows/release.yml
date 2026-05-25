@@ -1,14 +1,17 @@
 name: Release
 
 # Tag-triggered release. Each `vX.Y.Z` push:
-#   1. asserts manifest.json version matches the tag
-#   2. zips the runtime files (manifest + extension.js + icon + README +
-#      CHANGELOG + LICENSE)
-#   3. uploads the zip to the GitHub release that TEDI's installer reads
-#      from `releases/latest`.
+#   1. spins up windows / macos / linux runners (and arm64 cross-target)
+#   2. builds the `tedi-screenshot-helper` sidecar per (target_os, target_arch)
+#   3. collects every binary into `sidecar/<platform>-<arch>/` next to
+#      manifest.json + extension.js + logo.png
+#   4. zips the whole tree, uploads to the GitHub release that TEDI's
+#      installer reads from `releases/latest`.
 #
-# No native sidecar - this extension is pure JS, rendering with vanilla
-# DOM into the right-panel slot via TEDI's `registerPanelRenderer` hook.
+# Mirrors the tedi.discord-rich-presence pipeline. The Linux build adds
+# `libpipewire-0.3-dev` + `libdbus-1-dev` because xcap pulls libspa-sys
+# for the xdg-desktop-portal screencap path on Wayland and its build.rs
+# probes those via pkg-config.
 
 on:
   push:
@@ -17,16 +20,113 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to release (e.g. v0.1.0). Required when running manually."
+        description: "Tag to release (e.g. v0.5.0). Required when running manually."
         required: true
 
 permissions:
   contents: write
 
 jobs:
+  build-sidecar:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            sidecar_dir: windows-x86_64
+            exe_suffix: .exe
+          # Both Mac targets ride macos-latest (M1 = aarch64). x86_64 is a
+          # straight Rust cross-compile - clang on Apple Silicon handles the
+          # -arch x86_64 link by default. macos-13 (Intel hosted runner) is
+          # under quota pressure and frequently times out the queue, so we
+          # avoid it entirely.
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            sidecar_dir: macos-x86_64
+            exe_suffix: ""
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            sidecar_dir: macos-aarch64
+            exe_suffix: ""
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            sidecar_dir: linux-x86_64
+            exe_suffix: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Linux build dependencies
+        if: matrix.runner == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libpipewire-0.3-dev \
+            libdbus-1-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libegl-dev \
+            libgl1-mesa-dev \
+            libgbm-dev \
+            libdrm-dev \
+            libxcb1-dev \
+            libxcb-randr0-dev \
+            libxcb-shm0-dev
+          # xcap 0.9 pulls every Linux capture backend at build time AND
+          # link time. build.rs probes pkg-config for: libspa
+          # (xdg-desktop-portal screencap), wayland (libwayland), egl
+          # (khronos-egl), gl (mesa), gbm (Mesa Generic Buffer Manager -
+          # libspa's screencap path dma-buf-imports through it), drm
+          # (transitive of gbm), and xcb (X11 fallback with randr + shm).
+          # The link line for the helper binary references all of these
+          # via `-lEGL -lgbm -lwayland-client -lwayland-server -ldl
+          # -lpipewire-0.3 -lxcb` so the `-dev` packages must be present
+          # to resolve them.
+
+      - name: Install Rust toolchain (${{ matrix.target }})
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo registry / target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            sidecar-src/target
+          key: sidecar-${{ matrix.target }}-${{ hashFiles('sidecar-src/Cargo.toml') }}
+
+      - name: Build sidecar (release)
+        working-directory: sidecar-src
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Stage binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p stage/${{ matrix.sidecar_dir }}
+          src="sidecar-src/target/${{ matrix.target }}/release/tedi-screenshot-helper${{ matrix.exe_suffix }}"
+          dst="stage/${{ matrix.sidecar_dir }}/tedi-screenshot-helper${{ matrix.exe_suffix }}"
+          cp "$src" "$dst"
+          ls -la stage/${{ matrix.sidecar_dir }}
+
+      - name: Upload sidecar artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sidecar-${{ matrix.sidecar_dir }}
+          path: stage/${{ matrix.sidecar_dir }}
+          if-no-files-found: error
+
   release:
     name: Package + release
     runs-on: ubuntu-latest
+    needs: build-sidecar
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -54,6 +154,26 @@ jobs:
             exit 1
           fi
 
+      - name: Download every sidecar artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: sidecar
+          pattern: sidecar-*
+          merge-multiple: false
+
+      - name: Flatten sidecar layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          # actions/download-artifact creates sidecar/sidecar-<id>/<file>;
+          # we want sidecar/<id>/<file>. Move and clean up.
+          shopt -s nullglob
+          for dir in sidecar/sidecar-*; do
+            name="${dir#sidecar/sidecar-}"
+            mv "$dir" "sidecar/$name"
+          done
+          ls -R sidecar
+
       - name: Package extension
         id: pkg
         shell: bash
@@ -61,16 +181,17 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           out="dist/tedi.screenshot-${{ steps.ver.outputs.version }}.zip"
-          # Only ship runtime files. README + CHANGELOG + LICENSE stay in the
-          # repo but are bundled too so the install card shows the right
-          # metadata.
-          zip "$out" \
+          # Only ship runtime files: manifest + JS + icon + sidecar tree.
+          # The Rust source (sidecar-src/) stays in the repo but never in
+          # the release asset.
+          zip -r "$out" \
             manifest.json \
             extension.js \
             logo.png \
             README.md \
             CHANGELOG.md \
-            LICENSE
+            LICENSE \
+            sidecar
           unzip -l "$out"
           echo "path=$out" >> "$GITHUB_OUTPUT"
 

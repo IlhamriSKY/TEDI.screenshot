@@ -2,6 +2,19 @@
 
 All notable changes to **Screenshot** (formerly *TEDI Terminal Screenshot*). Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [0.5.0] - 2026-05-25
+
+### Changed
+
+- **Migrated native window-capture from a TEDI-core Tauri command to an extension-owned sidecar.** v0.4.0 put `xcap` + `image` directly in TEDI core's `Cargo.toml` and exposed `app_capture_window` as a host IPC command - the extension just called `ctx.invoke("app_capture_window")`. That left screenshot-specific native deps (and the Linux `libpipewire-0.3-dev` build requirement) sitting in the core binary forever, even for users who never install this extension. v0.5.0 ships its own `sidecar/<platform>-<arch>/tedi-screenshot-helper` binary built per-platform in this repo's release CI (mirroring the `tedi.discord-rich-presence` pattern), and the extension spawns the helper per click via `invoke:shell_bg_spawn_direct`. Core stays generic; uninstalling this extension removes every native dep with it.
+- **Permission set updated.** Manifest drops `invoke:app_capture_window` (no longer exists in core) and adds `invoke:shell_bg_spawn_direct` / `invoke:shell_bg_logs` / `invoke:shell_bg_kill` - the generic background-process API the sidecar architecture needs. Same affordances as the Discord extension; the install dialog flags these as medium-risk.
+- **Helper output transport is base64-over-stdout.** TEDI's `shell_bg_logs` reads child output via `String::from_utf8_lossy`, so raw PNG bytes would not survive intact. The helper base64-encodes the PNG before writing it to stdout; extension.js decodes and feeds the resulting `Blob` into the clipboard + download path. Adds ~33% to stdout volume vs raw bytes; on a typical 1920x1080 screenshot that's roughly 700 KB encoded - well under the 4 MiB log buffer cap.
+
+### Added
+
+- **`sidecar-src/`** sub-project: small Rust crate with `xcap = "0.9"` + `image = "0.25"` + `base64 = "0.22"` deps. Built per (target_os, target_arch) by the new release workflow; the resulting binary is staged into `sidecar/<platform>-<arch>/` and bundled into the release zip alongside `manifest.json` / `extension.js` / `logo.png`.
+- **Release CI rewritten** to mirror `tedi.discord-rich-presence`: matrix-builds the sidecar across `windows-latest` / `macos-latest` (x86_64 + aarch64) / `ubuntu-latest`, uploads each as an artifact, then a second job downloads all four, flattens the layout, zips the runtime tree, and uploads to the GitHub release. Ubuntu step adds `libpipewire-0.3-dev` + `libdbus-1-dev` for xcap's Wayland xdg-desktop-portal path.
+
 ## [0.4.0] - 2026-05-25
 
 ### Changed

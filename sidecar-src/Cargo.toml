@@ -1,0 +1,33 @@
+[package]
+name = "tedi-screenshot-helper"
+version = "0.5.0"
+edition = "2021"
+description = "Sidecar capture helper for the tedi.screenshot extension"
+license = "Apache-2.0"
+publish = false
+
+[[bin]]
+name = "tedi-screenshot-helper"
+path = "src/main.rs"
+
+[dependencies]
+# Cross-platform OS-level window capture. Owns the platform-specific
+# code path (WebView2 PrintWindow on Windows, CGWindowList on macOS,
+# XCB / pipewire-portal on Linux) that the TEDI core deliberately does
+# not pull in - keeping screenshot-specific native deps inside this
+# sidecar mirrors the tedi.discord-rich-presence helper architecture.
+xcap = "0.9"
+# PNG encoder. default-features = false strips unused codecs so the
+# final binary stays small (image otherwise pulls jpeg/gif/tiff/...).
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Base64 encode the PNG bytes onto stdout because the host's
+# shell_bg_logs reads child output as String::from_utf8_lossy - raw PNG
+# would be corrupted by the lossy conversion.
+base64 = "0.22"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
