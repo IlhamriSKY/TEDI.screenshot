@@ -2,6 +2,17 @@
 
 All notable changes to **TEDI Terminal Screenshot**. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [0.3.0] - 2026-05-25
+
+### Fixed
+
+- **Capture no longer produces a solid-black PNG.** Root cause: TEDI's terminal renderer is xterm.js's WebGL addon, which sets `preserveDrawingBuffer: false` upstream (a performance trade-off). After the browser composites a frame, the WebGL buffer is gone — and `drawImage(webglCanvas)` on a subsequent tick reads zero pixels. With nothing painted underneath, the resulting PNG was uniformly black. The capture pipeline now dispatches a synthetic `resize` event before reading (which forces xterm's ResizeObserver-driven redraw to issue a fresh draw call) and waits two animation frames before `drawImage` so we're inside the live frame where the buffer still holds visible pixels.
+
+### Added
+
+- **Wallpaper-aware capture.** When the user has a theme background set (TEDI 0.2.23's `#tedi-bg-layer`), the screenshot now paints the wallpaper underneath the terminal cells first, mirroring what's actually on screen. Reads the CSS `background-image: url(...)`, computes the same `background-size: cover` placement the live layer uses, applies the configured blur via `ctx.filter`, and reapplies the darken overlay extracted from the layer's `linear-gradient`. Cross-origin images load with `crossOrigin = "anonymous"` so a CDN-hosted wallpaper doesn't taint the canvas; if it does throw (e.g. server refuses CORS), the wallpaper layer is skipped silently and the terminal background colour takes over.
+- **Theme-respecting cell background.** The fill colour painted under the canvases is read from the terminal element's computed `background-color`, so it follows the active custom theme. When that colour resolves to transparent and a wallpaper is set, the fill is skipped entirely — `--tedi-canvas-alpha` < 1 makes the wallpaper bleed through identically to the live UI.
+
 ## [0.2.1] - 2026-05-23
 
 ### Changed

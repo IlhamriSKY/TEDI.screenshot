@@ -628,9 +628,23 @@ function describeSaveLocation() {
 
 /**
  * Paints every `<canvas>` under the terminal element onto a fresh
- * 2D canvas at device-pixel resolution. xterm's WebGL renderer keeps
- * its drawing buffer between frames as long as nothing forces a
- * reset, so `drawImage(canvas)` reliably copies the visible pixels.
+ * 2D canvas at device-pixel resolution. Steps, in order:
+ *
+ *   1. If the user's theme paints a wallpaper (`#tedi-bg-layer`), copy
+ *      that into the output first so the PNG reflects what's actually on
+ *      screen — terminal cells are semi-transparent over the wallpaper
+ *      when `--tedi-canvas-alpha` < 1.
+ *   2. Paint the terminal's background colour over the wallpaper (this
+ *      respects the theme; xterm renders cells semi-transparent over
+ *      the same background).
+ *   3. Force xterm to repaint by dispatching a `resize` event, then
+ *      wait two animation frames. xterm's WebGL renderer keeps its
+ *      drawing buffer for the current frame only; without the nudge,
+ *      `drawImage(webglCanvas)` reads an empty (black) buffer and the
+ *      whole PNG comes out solid black — the user-reported "ss filenya
+ *      gelap" bug.
+ *   4. Composite every child canvas in document order (text layer
+ *      first, then cursor/selection overlay).
  */
 async function captureElement(el) {
   const rect = el.getBoundingClientRect();
@@ -644,16 +658,34 @@ async function captureElement(el) {
   const ctx2d = out.getContext("2d");
   if (!ctx2d) return { blob: null };
 
-  // Paint the terminal's background colour first so transparent
-  // canvas regions (selection layer, etc.) don't leave the PNG with
-  // a transparent backdrop.
+  // 1. Wallpaper layer (if the user enabled a theme background).
+  await paintWallpaper(ctx2d, el, rect, dpr, width, height);
+
+  // 2. Terminal background colour. With `--tedi-canvas-alpha` < 1 this
+  //    is the same semi-transparent fill the live terminal uses, so the
+  //    wallpaper bleeds through identically to what's on screen.
   const bgHost = el.querySelector(".xterm-viewport, .xterm") ?? el;
   const bg = readBackground(bgHost);
-  ctx2d.fillStyle = bg;
-  ctx2d.fillRect(0, 0, width, height);
+  if (bg) {
+    ctx2d.fillStyle = bg;
+    ctx2d.fillRect(0, 0, width, height);
+  }
 
-  // Composite child canvases in document order so the cursor/selection
-  // layers end up on top of the text layer.
+  // 3. Nudge xterm to repaint. The WebGL renderer's
+  //    `preserveDrawingBuffer` is FALSE upstream, so after the browser
+  //    composites a frame the buffer is gone. Dispatching a `resize`
+  //    event triggers xterm's ResizeObserver-driven redraw; the next
+  //    rAF puts us inside the frame where the buffer is fresh.
+  try {
+    window.dispatchEvent(new Event("resize"));
+  } catch {
+    // Some environments throw on synthetic events; ignore.
+  }
+  await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+  await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+
+  // 4. Composite child canvases. Source-over default keeps cursor and
+  //    selection layers visible over the text layer.
   const canvases = el.querySelectorAll("canvas");
   for (const c of canvases) {
     const cr = c.getBoundingClientRect();
@@ -664,14 +696,110 @@ async function captureElement(el) {
     try {
       ctx2d.drawImage(c, dx, dy, dw, dh);
     } catch {
-      // `drawImage` can throw on a WebGL canvas whose buffer was
-      // wiped (e.g. the GPU just reclaimed it). Skip and continue;
-      // the remaining layers will still give a useful image.
+      // `drawImage` can throw on a WebGL canvas whose buffer was wiped
+      // (the GPU just reclaimed it). Skip and continue; the remaining
+      // layers + wallpaper still give a useful image instead of black.
     }
   }
 
   const blob = await new Promise((resolve) => out.toBlob(resolve, "image/png"));
   return { blob };
+}
+
+/**
+ * Mirrors the live `#tedi-bg-layer` div onto the capture canvas. The
+ * wallpaper is set as a CSS `background-image: url(...)` so we extract
+ * the URL, load it as an `<img>`, then paint it stretched to fill, with
+ * the user-configured blur + darken filters applied via `ctx.filter`.
+ * Silently no-ops when no wallpaper is set or the image fails to load
+ * — the terminal background colour painted next is still a reasonable
+ * fallback.
+ */
+async function paintWallpaper(ctx2d, paneEl, paneRect, dpr, width, height) {
+  const layer = document.getElementById("tedi-bg-layer");
+  if (!(layer instanceof HTMLElement)) return;
+  const cs = getComputedStyle(layer);
+  // Skip when the layer is hidden (display:none, visibility:hidden, or
+  // background-image: none).
+  if (cs.display === "none" || cs.visibility === "hidden") return;
+  const bgImage = cs.backgroundImage;
+  if (!bgImage || bgImage === "none") return;
+  // `background-image` is "url(...)" potentially preceded by a
+  // linear-gradient (darken overlay). The actual image URL is the LAST
+  // url() entry; everything before it is overlay.
+  const urlMatches = [...bgImage.matchAll(/url\((['"]?)(.*?)\1\)/g)];
+  const lastUrl = urlMatches.length > 0 ? urlMatches[urlMatches.length - 1][2] : null;
+  if (!lastUrl) return;
+
+  let img;
+  try {
+    img = await loadImage(lastUrl);
+  } catch {
+    return;
+  }
+
+  // Match CSS `background-size: cover` semantics: scale the image so it
+  // covers the pane rect while preserving aspect ratio.
+  const iw = img.naturalWidth || img.width;
+  const ih = img.naturalHeight || img.height;
+  if (!iw || !ih) return;
+  // CSS bg layer covers the entire window; clip to the pane region.
+  const winW = window.innerWidth;
+  const winH = window.innerHeight;
+  const scale = Math.max(winW / iw, winH / ih);
+  const drawW = iw * scale;
+  const drawH = ih * scale;
+  // Centred per CSS `background-position: center`.
+  const drawX = (winW - drawW) / 2;
+  const drawY = (winH - drawH) / 2;
+  // Convert window-coordinates to pane-relative DPR pixels.
+  const srcX = paneRect.left - drawX;
+  const srcY = paneRect.top - drawY;
+
+  // Apply the same blur the live layer uses. Darken from `linear-gradient
+  // (rgba(0,0,0,X), ...)` is read separately because `ctx.filter` doesn't
+  // support overlay tints.
+  const blurMatch = /blur\(([0-9.]+)px\)/.exec(cs.filter || "");
+  const blur = blurMatch ? parseFloat(blurMatch[1]) : 0;
+  if (blur > 0) ctx2d.filter = `blur(${blur * dpr}px)`;
+  try {
+    ctx2d.drawImage(
+      img,
+      srcX / scale,
+      srcY / scale,
+      paneRect.width / scale,
+      paneRect.height / scale,
+      0,
+      0,
+      width,
+      height,
+    );
+  } catch {
+    // CORS-tainted cross-origin URLs throw; ignore so the rest of the
+    // capture still runs.
+  }
+  ctx2d.filter = "none";
+
+  // Re-apply the darken overlay if present. Extracted from the first
+  // linear-gradient layer in the computed background-image.
+  const darkMatch = /linear-gradient\(rgba\(0,\s*0,\s*0,\s*([0-9.]+)\)/.exec(bgImage);
+  const dark = darkMatch ? parseFloat(darkMatch[1]) : 0;
+  if (dark > 0) {
+    ctx2d.fillStyle = `rgba(0, 0, 0, ${dark})`;
+    ctx2d.fillRect(0, 0, width, height);
+  }
+}
+
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    // Allow CORS-anonymous loads so cross-origin wallpapers from CDNs
+    // can be drawn onto a canvas without tainting it.
+    img.crossOrigin = "anonymous";
+    img.onload = () => resolve(img);
+    img.onerror = (err) => reject(err);
+    img.src = url;
+  });
 }
 
 function readBackground(el) {
@@ -681,7 +809,10 @@ function readBackground(el) {
   } catch {
     // ignore
   }
-  return "#000000";
+  // Return null (not black) when no background can be read. Callers
+  // skip the fillRect when null so the wallpaper underneath stays
+  // visible — black-on-wallpaper would be the same bug we're fixing.
+  return null;
 }
 
 /* ------------------------------------------------------------------ */
