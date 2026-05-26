@@ -2,6 +2,12 @@
 
 All notable changes to **Screenshot** (formerly *TEDI Terminal Screenshot*). Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [0.5.1] - 2026-05-26
+
+### Changed
+
+- **Actionable toast when the helper binary is missing.** Wrapped the `ctx.invoke("shell_bg_spawn_direct")` call in `runCapture` with its own try/catch. If the spawn fails with a "file not found" style error (Windows `"(os error 2)"`, POSIX `"No such file or directory"`, etc.), the user now sees a clear "Screenshot helper missing for `<platform>-<arch>`. Reinstall the Screenshot extension to repopulate `sidecar/`." toast instead of the cryptic raw OS string. Other spawn failures (permission, IPC) are re-thrown with the command name tagged so the catch block higher up still reports them, just with more context. Same UX a half-broken install would hit when the sidecar dir was wiped or the platform tuple does not match any bundled binary.
+
 ## [0.5.0] - 2026-05-25
 
 ### Changed
