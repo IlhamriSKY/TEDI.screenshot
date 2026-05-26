@@ -1,7 +1,7 @@
 {
   "id": "tedi.screenshot",
   "name": "Screenshot",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "One-click capture of the entire TEDI window. Click the camera icon in the status bar (or press Ctrl+Alt+S) to save a PNG to your Downloads folder and copy it to the clipboard. Uses a native OS window-capture sidecar bundled with the extension, so WebGL terminal panes render correctly instead of coming out black.",
   "author": "IlhamRiski - ilhamriski.com",
   "homepage": "https://github.com/IlhamriSKY/TEDI.screenshot",
