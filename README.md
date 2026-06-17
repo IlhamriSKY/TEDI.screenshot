@@ -30,17 +30,12 @@ card. If a new release exists, click **Update** to reinstall in place.
 
 ## How it works
 
-```
-TEDI webview                       Native sidecar
-┌────────────────────────┐        ┌──────────────────────────────┐
-│ extension.js           │  spawn │ tedi-screenshot-helper       │
-│ • status-bar button    │ ─────▶ │ • picks window by title      │
-│ • Mod+Alt+S keybinding │        │ • xcap composites the frame  │
-│ • collect base64 PNG   │ ◀───── │ • writes base64 PNG to stdout │
-└────────────────────────┘        └──────────────────────────────┘
-       │                                       │
-       ▼                                       ▼
-clipboard + Downloads/tedi-<stamp>.png   xcap / Quartz / PipeWire
+```mermaid
+flowchart LR
+    A["extension.js<br/>status-bar button, Mod+Alt+S<br/>collects base64 PNG"] -->|"spawn with window title"| B["tedi-screenshot-helper<br/>picks window by title,<br/>xcap composites the frame"]
+    B -->|"base64 PNG via stdout"| A
+    B --> C["xcap / Quartz / PipeWire"]
+    A --> D["clipboard + Downloads/tedi-stamp.png"]
 ```
 
 On click the extension:
