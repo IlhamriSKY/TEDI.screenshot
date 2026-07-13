@@ -1,6 +1,6 @@
 # TEDI Screenshot
 
-One-click window screenshot extension for [TEDI](https://github.com/IlhamriSKY/TEDI).
+One-click window screenshot extension for [TEDI](https://tedi.ilhamriski.com/).
 Adds a camera icon to the status bar (or press `Mod+Alt+S`); the resulting PNG
 is copied to the clipboard and saved to your Downloads folder. A native sidecar
 handles the capture so WebGL terminal panes render correctly instead of coming

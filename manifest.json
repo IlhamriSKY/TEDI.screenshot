@@ -4,7 +4,7 @@
   "version": "0.5.5",
   "description": "Captures the entire TEDI window to PNG, saves it to Downloads, and copies it to the clipboard. Click the status bar camera icon or press Ctrl+Alt+S.",
   "author": "IlhamRiski - ilhamriski.com",
-  "homepage": "https://github.com/IlhamriSKY/TEDI.screenshot",
+  "homepage": "https://tedi.ilhamriski.com/",
   "icon": "logo.png",
   "main": "extension.js",
   "permissions": [
