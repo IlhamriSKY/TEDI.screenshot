@@ -2,6 +2,12 @@
 
 All notable changes to **Screenshot** (formerly *TEDI Terminal Screenshot*). Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [0.5.6] - 2026-07-18
+
+### Changed
+
+- **Documentation.** Project links point at the TEDI website (https://tedi.ilhamriski.com/) in both `manifest.json` and the README, the README follows the structure shared across the TEDI extensions, and "How it works" is rendered as a Mermaid diagram. No behaviour change.
+
 ## [0.5.5] - 2026-06-16
 
 ### Changed
