@@ -2,6 +2,12 @@
 
 All notable changes to **Screenshot** (formerly *TEDI Terminal Screenshot*). Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [0.5.7] - 2026-08-03
+
+### Changed
+
+- **The status-bar button is declared an action, so it stops fighting the host for its own click** (needs TEDI 0.4.7). The manifest marks the panel `kind: "action"`, which tells TEDI to run `tedi.screenshot.capture` and never slide the right-slot panel out. Until that field existed this extension had to hunt its own button in the status bar with a capture-phase `document` click listener and cancel the event, which broke every time the host's markup moved. The panel renderer stays as a safety net for an older TEDI that ignores `kind`, or for anything that calls `panel.toggle` directly.
+
 ## [0.5.6] - 2026-07-18
 
 ### Changed

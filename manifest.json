@@ -1,7 +1,7 @@
 {
   "id": "tedi.screenshot",
   "name": "Screenshot",
-  "version": "0.5.6",
+  "version": "0.5.7",
   "description": "Captures the entire TEDI window to PNG, saves it to Downloads, and copies it to the clipboard. Click the status bar camera icon or press Ctrl+Alt+S.",
   "author": "IlhamRiski - ilhamriski.com",
   "homepage": "https://tedi.ilhamriski.com/",
@@ -37,7 +37,8 @@
         "defaultOpen": false,
         "toggleCommand": "tedi.screenshot.capture",
         "hideHostHeader": true,
-        "compact": true
+        "compact": true,
+        "kind": "action"
       }
     ]
   },
