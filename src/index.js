@@ -27,7 +27,7 @@
 // deactivate, which the host imports from the bundled single file.
 
 import { runCapture } from "./capture.js";
-import { BUTTON_SELECTOR, CMD_CAPTURE, PANEL_ID, ctx, setCaptureHandler, setCtx } from "./runtime.js";
+import { CMD_CAPTURE, PANEL_ID, ctx, setCtx } from "./runtime.js";
 import { safeToast } from "./ui.js";
 
 export async function activate(context) {
@@ -55,31 +55,15 @@ export async function activate(context) {
     await runCapture();
   });
 
-  // Click path: intercept the host's auto-rendered status-bar button so
-  // the click never opens the right-slot panel. Capture-phase listener
-  // runs BEFORE React's bubble-phase onClick handler.
-  const captureHandler = (event) => {
-    const target = event.target instanceof Element ? event.target : null;
-    if (!target) return;
-    const btn = target.closest(BUTTON_SELECTOR);
-    if (!btn) return;
-    event.stopImmediatePropagation();
-    event.preventDefault();
-    void runCapture();
-  };
-  setCaptureHandler(captureHandler);
-  document.addEventListener("click", captureHandler, true);
-  ctx.addDisposer(() => {
-    if (captureHandler) {
-      document.removeEventListener("click", captureHandler, true);
-      setCaptureHandler(null);
-    }
-  });
+  // Click path: the manifest declares this panel `kind: "action"`, so the host
+  // runs `toggleCommand` on click and never opens the right-slot panel. Before
+  // that existed this had to intercept its own button with a capture-phase
+  // document listener, which broke whenever the host's markup moved.
 
-  // Safety net for the right-panel slot. If the click ever slips past
-  // captureHandler (e.g. another extension calls `panel.toggle`
-  // programmatically), the host mounts this renderer. We close the panel
-  // on the next frame and trigger the capture instead.
+  // Safety net for the right-panel slot: on an older host that ignores
+  // `kind`, or if anything calls `panel.toggle` programmatically, the host
+  // mounts this renderer. We close the panel on the next frame and trigger the
+  // capture instead.
   const disposeRenderer = ctx.registerPanelRenderer(PANEL_ID, (container) => {
     container.replaceChildren();
     const note = document.createElement("div");
