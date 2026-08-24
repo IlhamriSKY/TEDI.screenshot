@@ -21,6 +21,7 @@ export { PANEL_ID, PANEL_TITLE, CMD_CAPTURE, SPAWN_TIMEOUT_MS, POLL_INTERVAL_MS 
 
 // ----------------------------- Module state ----------------------------------
 
+/** @type {import("../tedi").ExtensionContext | null} */
 export let ctx = null;
 export let busy = false;
 

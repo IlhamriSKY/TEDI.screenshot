@@ -30,6 +30,7 @@ import { runCapture } from "./capture.js";
 import { CMD_CAPTURE, PANEL_ID, ctx, setCtx } from "./runtime.js";
 import { safeToast } from "./ui.js";
 
+/** @param {import("../tedi").ExtensionContext} context */
 export async function activate(context) {
   setCtx(context);
 
