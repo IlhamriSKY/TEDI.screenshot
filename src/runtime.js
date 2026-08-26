@@ -4,7 +4,6 @@
 // ESM live-binding semantics across the bundle).
 
 const PANEL_ID = "screenshot";
-const PANEL_TITLE = "Screenshot";
 const CMD_CAPTURE = "tedi.screenshot.capture";
 
 /** Hard cap on the spawn-to-exit wait. xcap typically returns in <500ms;
@@ -17,7 +16,7 @@ const SPAWN_TIMEOUT_MS = 15_000;
  *  the IPC channel at 1kHz. */
 const POLL_INTERVAL_MS = 80;
 
-export { PANEL_ID, PANEL_TITLE, CMD_CAPTURE, SPAWN_TIMEOUT_MS, POLL_INTERVAL_MS };
+export { PANEL_ID, CMD_CAPTURE, SPAWN_TIMEOUT_MS, POLL_INTERVAL_MS };
 
 // ----------------------------- Module state ----------------------------------
 
